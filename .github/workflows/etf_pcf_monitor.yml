@@ -1,0 +1,28 @@
+name: ETF PCF Monitor (08:15 AM Push)
+
+on:
+  schedule:
+    # UTC 00:15 即北京时间 08:15，周一至周五运行
+    - cron: '15 0 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run PCF Monitor (Pure Text Push)
+        env:
+          WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
+        run: python main.py
