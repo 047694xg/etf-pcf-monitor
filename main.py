@@ -9,10 +9,8 @@ import os
 import sys
 
 # 企业微信 Webhook (优先从环境变量读取，默认保底)
-WECHAT_WEBHOOK = os.getenv(
-    'WECHAT_WEBHOOK',
-    'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=35698b2f-960f-4ce8-b7bb-a4ac60888d9d'
-)
+DEFAULT_WEBHOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=35698b2f-960f-4ce8-b7bb-a4ac60888d9d'
+WECHAT_WEBHOOK = os.getenv('WECHAT_WEBHOOK') or DEFAULT_WEBHOOK
 
 # 核心纳指与标普500跨境ETF监控池
 MONITOR_POOL = [
