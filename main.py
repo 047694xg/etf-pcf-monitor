@@ -202,6 +202,9 @@ def build_pure_text_report() -> str:
     with ThreadPoolExecutor(max_workers=6) as executor:
         results = list(executor.map(lambda it: fetch_single_etf(it, sz_valid_date), MONITOR_POOL))
 
+    # 按照当日上限 (quota) 由高到低降序排序；若上限相同则按 CU资产净值 降序
+    results.sort(key=lambda x: (x.get('quota', 0.0), x.get('cu_nav', 0.0)), reverse=True)
+
     # 判断是否为休市留存
     if sz_valid_date != today_str:
         date_badge = f"{sz_valid_date}(休市留存)"
@@ -209,7 +212,7 @@ def build_pure_text_report() -> str:
         date_badge = sz_valid_date
 
     lines = []
-    lines.append("【08:05 盘前】美股跨境ETF申购限额官方监控")
+    lines.append("【08:05 盘前】美股跨境ETF申购限额官方监控 (按上限降序)")
     lines.append(f"基准日: {date_badge} | 模式: 沪深证券交易所官方直连")
     lines.append("-" * 60)
     lines.append("代码    简称          状态   当日上限   单户    CU   CU净值(万)  市场")
