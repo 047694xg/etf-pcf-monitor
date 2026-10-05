@@ -1,8 +1,8 @@
 """
 ================================================================================
 美股跨境ETF(纳指/标普500/美国50) 盘前官方PCF申赎限额监控引擎
-- 深市标的 (159xxx): 直连深交所官方公开 PCF XML (reportdocs.static.szse.cn)
-- 沪市标的 (51xxxx): 直连上交所官方公开 PCF XML (query.sse.com.cn)
+- 深市标的 (159xxx): 直连深交所官方公开 PCF XML (自动处理休市/节假日回溯)
+- 沪市标的 (51xxxx): 直连上交所官方公开 PCF XML (最新托管文件直接提取)
 - 核心指标: 申购上限、单户上限、CU、最小申购赎回单位资产净值(NAVperCU)
 - 微信通知: 永久纯文本 (msgtype: text)，无任何 Markdown 渲染，等宽对齐排版
 ================================================================================
@@ -75,8 +75,27 @@ def pad_cjk(s: str, target_width: int) -> str:
         return s
     return s + ' ' * (target_width - current_w)
 
+def probe_latest_szse_date(benchmark_code: str = "159509") -> str:
+    """
+    智能探查深交所最新有效 PCF 文件日期。
+    若当天为周末、法定节假日或早间尚未挂出，自动向前回溯至最近的有效交易日。
+    """
+    now = datetime.datetime.now()
+    # 如果在早晨 07:30 之前，当天 PCF 极大概率尚未挂出，优先从昨天/前天探查
+    for days_back in range(12):
+        check_dt = now - datetime.timedelta(days=days_back)
+        d_str = check_dt.strftime("%Y%m%d")
+        url = f"https://reportdocs.static.szse.cn/files/text/ETFDown/pcf_{benchmark_code}_{d_str}.xml"
+        try:
+            r = requests.head(url, headers=SZ_HEADERS, timeout=3)
+            if r.status_code == 200:
+                return d_str
+        except Exception:
+            pass
+    return now.strftime("%Y%m%d")
+
 def fetch_szse_pcf(code: str, date_str: str) -> dict:
-    """深交所官方静态公开 PCF XML 解析 (带自动重试与最小申赎单位净值提取)"""
+    """深交所官方静态公开 PCF XML 解析"""
     url = f"https://reportdocs.static.szse.cn/files/text/ETFDown/pcf_{code}_{date_str}.xml"
     for attempt in range(2):
         try:
@@ -114,7 +133,7 @@ def fetch_szse_pcf(code: str, date_str: str) -> dict:
     return {"success": False, "status": "待查", "quota": 0.0, "user_quota": 0.0, "cu": 0.0, "cu_nav": 0.0, "source": "深市"}
 
 def fetch_sse_pcf(code: str) -> dict:
-    """上交所官方静态公开 PCF XML 直连解析 (带自动重试与最小申赎单位净值提取)"""
+    """上交所官方静态公开 PCF XML 直连解析"""
     url = f"https://query.sse.com.cn/etfDownload/downloadETF2Bulletin.do?fundCode={code}"
     for attempt in range(2):
         try:
@@ -147,33 +166,33 @@ def fetch_sse_pcf(code: str) -> dict:
             time.sleep(0.5)
     return {"success": False, "status": "待查", "quota": 0.0, "user_quota": 0.0, "cu": 0.0, "cu_nav": 0.0, "source": "沪市"}
 
-def fetch_single_etf(item: dict, target_date: str) -> dict:
+def fetch_single_etf(item: dict, sz_target_date: str) -> dict:
     code = item['code']
     market = item['market']
     if market == 'SZ':
-        res = fetch_szse_pcf(code, target_date)
+        res = fetch_szse_pcf(code, sz_target_date)
     else:
         res = fetch_sse_pcf(code)
     return {**item, **res}
 
-def build_pure_text_report(target_date: str = None) -> str:
-    if not target_date:
-        today = datetime.date.today()
-        if today.weekday() == 5:
-            dt = today - datetime.timedelta(days=1)
-        elif today.weekday() == 6:
-            dt = today - datetime.timedelta(days=2)
-        else:
-            dt = today
-        target_date = dt.strftime("%Y%m%d")
+def build_pure_text_report() -> str:
+    today_str = datetime.datetime.now().strftime("%Y%m%d")
+    # 动态探测深市最新有效日期（自动穿透周末与休市假期）
+    sz_valid_date = probe_latest_szse_date("159509")
 
     # 并发抓取加速响应
     with ThreadPoolExecutor(max_workers=6) as executor:
-        results = list(executor.map(lambda it: fetch_single_etf(it, target_date), MONITOR_POOL))
+        results = list(executor.map(lambda it: fetch_single_etf(it, sz_valid_date), MONITOR_POOL))
+
+    # 判断是否为休市留存
+    if sz_valid_date != today_str:
+        date_badge = f"{sz_valid_date}(休市留存)"
+    else:
+        date_badge = sz_valid_date
 
     lines = []
     lines.append("【08:15 盘前】美股跨境ETF申购限额官方监控")
-    lines.append(f"基准日: {target_date} | 模式: 沪深证券交易所官方直连")
+    lines.append(f"基准日: {date_badge} | 模式: 沪深证券交易所官方直连")
     lines.append("-" * 60)
     lines.append("代码    简称          状态   当日上限   单户    CU   CU净值(万)  市场")
     lines.append("-" * 60)
@@ -223,13 +242,7 @@ def send_wechat_text(content: str) -> dict:
     return r.json()
 
 if __name__ == '__main__':
-    today = datetime.date.today()
-    if today.weekday() >= 5:
-        trade_date = "20260930"
-    else:
-        trade_date = today.strftime('%Y%m%d')
-        
-    msg = build_pure_text_report(trade_date)
+    msg = build_pure_text_report()
     print("=== 纯文本报表预览 ===")
     print(msg)
     res = send_wechat_text(msg)
