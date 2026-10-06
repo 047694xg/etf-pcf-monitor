@@ -258,9 +258,10 @@ def build_pure_text_report() -> str:
     lines = []
     lines.append("【08:05 盘前】美股跨境ETF申购限额官方监控 (按上限降序)")
     lines.append(f"基准日: {date_badge} | 模式: 沪深证券交易所官方直连")
-    lines.append("-" * 78)
-    lines.append("代码    简称          状态   当日上限   单户    CU   CU净值(万)   溢价率   市场")
-    lines.append("-" * 78)
+    lines.append("-" * 76)
+    headers = ['代码  ', '简称' + ' ' * 10, '状态', '当日上限', '  单户', '    CU', 'CU净值(万)', '  溢价率']
+    lines.append("  ".join(headers))
+    lines.append("-" * 76)
 
     for it in results:
         code = it['code']
@@ -272,17 +273,16 @@ def build_pure_text_report() -> str:
         cu_val = it.get('cu', 0.0)
         cu_nav_val = it.get('cu_nav', 0.0)
         prem_val = it.get('premium_rate')
-        src = it.get('source', '深市')
 
         if it.get('success'):
             quota_str = f"{q_val:>6.0f}万" if q_val > 0 else "  不限  "
-            user_str = f"{u_val:>4.0f}万" if u_val > 0 else " 不限 "
-            cu_str = f"{cu_val:>4.0f}万" if cu_val > 0 else "  -   "
+            user_str = f"{u_val:>4.0f}万" if u_val > 0 else "  不限"
+            cu_str = f"{cu_val:>4.0f}万" if cu_val > 0 else "   -  "
             cu_nav_str = f"{cu_nav_val:>8.2f}万" if cu_nav_val > 0 else "    -     "
         else:
             quota_str = " 未披露 "
             user_str = "  -   "
-            cu_str = "  -   "
+            cu_str = "   -  "
             cu_nav_str = "    -     "
 
         if prem_val is not None:
@@ -290,10 +290,10 @@ def build_pure_text_report() -> str:
         else:
             prem_str = "   -    "
 
-        name_col = pad_cjk(name, 12)
-        lines.append(f"{code}  {name_col}  {st}  {quota_str}  {user_str}  {cu_str}  {cu_nav_str}  {prem_str}  {src}")
+        name_col = pad_cjk(name, 14)
+        lines.append(f"{code}  {name_col}  {st}  {quota_str}  {user_str}  {cu_str}  {cu_nav_str}  {prem_str}")
 
-    lines.append("-" * 78)
+    lines.append("-" * 76)
     lines.append("说明:")
     lines.append("1. 当日上限为基金公司事前申购总配额(万份)，高溢价时9:15竞价秒光;")
     lines.append("2. 单户限额为单一投资者账户当日申购封顶，CU为最小申赎单元(万份);")
