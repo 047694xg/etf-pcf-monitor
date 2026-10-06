@@ -1,11 +1,12 @@
 """
 ================================================================================
-美股跨境ETF(纳指/标普500/美国50) 盘前官方PCF申赎限额监控引擎
-- 定时标准: 每天早晨 08:05 准时执行并推送
+美股跨境ETF(纳指/标普500/美国50) 盘前官方PCF申赎限额与溢价率监控引擎
+- 定时标准: 每天早晨 08:05 准时执行并推送 (周一至周五工作日运行，周六日静默)
 - 深市标的 (159xxx): 直连深交所官方公开 PCF XML (智能探测最新可用与早间就绪轮询)
 - 沪市标的 (51xxxx): 直连上交所官方公开 PCF XML (最新托管文件直接提取)
-- 核心指标: 申购上限、单户上限、CU、最小申购赎回单位资产净值(NAVperCU)
+- 核心指标: 当日申购上限、单户上限、CU(万份)、CU资产净值(万元)、溢价率(%)
 - 微信通知: 永久纯文本 (msgtype: text)，无任何 Markdown 渲染，等宽对齐排版
+- 排序规则: 按照当日上限由高到低降序排列；若上限相同则按 CU净值 降序
 ================================================================================
 """
 import os
@@ -76,6 +77,31 @@ def pad_cjk(s: str, target_width: int) -> str:
         return s
     return s + ' ' * (target_width - current_w)
 
+def fetch_all_close_prices(pool: list) -> dict:
+    """
+    轻量极速批量获取所有监控 ETF 的上一交易日收盘价 (腾讯行情直连)
+    零外部大库依赖，毫秒级响应
+    """
+    symbols = [f"{it['market'].lower()}{it['code']}" for it in pool]
+    url = f"http://qt.gtimg.cn/q={','.join(symbols)}"
+    try:
+        r = requests.get(url, timeout=5)
+        price_map = {}
+        for line in r.text.split(';'):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split('~')
+            if len(parts) > 4:
+                code = parts[2]
+                # 盘前 08:05 时 parts[3] 为上一交易日收盘价；若为0则取 parts[4] 昨收
+                close_p = float(parts[3]) if parts[3] and float(parts[3]) > 0 else float(parts[4])
+                price_map[code] = close_p
+        return price_map
+    except Exception as e:
+        print(f"[WARN] 批量获取收盘价异常: {repr(e)}")
+        return {}
+
 def check_szse_file_exists(code: str, date_str: str) -> bool:
     url = f"https://reportdocs.static.szse.cn/files/text/ETFDown/pcf_{code}_{date_str}.xml"
     try:
@@ -130,6 +156,7 @@ def fetch_szse_pcf(code: str, date_str: str) -> dict:
 
                 cu = float(g('CreationRedemptionUnit', '0')) / 10000.0
                 cu_nav = float(g('NAVperCU', '0')) / 10000.0  # 万元
+                nav = float(g('NAV', '0'))
                 net_limit = float(g('NetCreationLimit', '0')) / 10000.0
                 cum_limit = float(g('CreationLimit', '0')) / 10000.0
                 user_net_limit = float(g('NetCreationLimitPerUser', '0')) / 10000.0
@@ -143,13 +170,14 @@ def fetch_szse_pcf(code: str, date_str: str) -> dict:
                     "user_quota": user_net_limit,
                     "cu": cu,
                     "cu_nav": cu_nav,
+                    "nav": nav,
                     "source": "深市"
                 }
         except Exception as e:
             if attempt == 1:
                 print(f"[WARN] 深交所 {code} 解析异常: {repr(e)}")
             time.sleep(0.5)
-    return {"success": False, "status": "待查", "quota": 0.0, "user_quota": 0.0, "cu": 0.0, "cu_nav": 0.0, "source": "深市"}
+    return {"success": False, "status": "待查", "quota": 0.0, "user_quota": 0.0, "cu": 0.0, "cu_nav": 0.0, "nav": 0.0, "source": "深市"}
 
 def fetch_sse_pcf(code: str) -> dict:
     """上交所官方静态公开 PCF XML 直连解析"""
@@ -163,6 +191,7 @@ def fetch_sse_pcf(code: str) -> dict:
                 tday = d.get('TradingDay', '')
                 cu = float(d.get('CreationRedemptionUnit', '0')) / 10000.0
                 cu_nav = float(d.get('NAVperCU', '0')) / 10000.0  # 万元
+                nav = float(d.get('NAV') or 0.0)
                 
                 c_limit = float(d.get('CreationLimit') or d.get('NetCreationLimit') or 0.0) / 10000.0
                 u_limit = float(d.get('CreationLimitPerAcct') or d.get('NetCreationLimitPerAcct') or 0.0) / 10000.0
@@ -176,6 +205,7 @@ def fetch_sse_pcf(code: str) -> dict:
                     "user_quota": u_limit,
                     "cu": cu,
                     "cu_nav": cu_nav,
+                    "nav": nav,
                     "trade_date": tday,
                     "source": "沪市"
                 }
@@ -183,7 +213,7 @@ def fetch_sse_pcf(code: str) -> dict:
             if attempt == 1:
                 print(f"[WARN] 上交所 {code} 解析异常: {repr(e)}")
             time.sleep(0.5)
-    return {"success": False, "status": "待查", "quota": 0.0, "user_quota": 0.0, "cu": 0.0, "cu_nav": 0.0, "source": "沪市"}
+    return {"success": False, "status": "待查", "quota": 0.0, "user_quota": 0.0, "cu": 0.0, "cu_nav": 0.0, "nav": 0.0, "source": "沪市"}
 
 def fetch_single_etf(item: dict, sz_target_date: str) -> dict:
     code = item['code']
@@ -198,11 +228,25 @@ def build_pure_text_report() -> str:
     today_str = datetime.datetime.now().strftime("%Y%m%d")
     sz_valid_date = probe_latest_szse_date("159509")
 
-    # 并发抓取加速响应
+    # 1. 批量获取上一交易日收盘价
+    close_prices = fetch_all_close_prices(MONITOR_POOL)
+
+    # 2. 并发抓取官方 PCF XML
     with ThreadPoolExecutor(max_workers=6) as executor:
         results = list(executor.map(lambda it: fetch_single_etf(it, sz_valid_date), MONITOR_POOL))
 
-    # 按照当日上限 (quota) 由高到低降序排序；若上限相同则按 CU资产净值 降序
+    # 3. 计算收盘溢价率: (收盘价 - 基金份额净值NAV) / NAV * 100%
+    for it in results:
+        code = it['code']
+        close_p = close_prices.get(code, 0.0)
+        nav = it.get('nav', 0.0)
+        it['close_price'] = close_p
+        if nav > 0 and close_p > 0:
+            it['premium_rate'] = ((close_p - nav) / nav) * 100.0
+        else:
+            it['premium_rate'] = None
+
+    # 4. 按照当日上限 (quota) 由高到低降序排序；若上限相同则按 CU资产净值 降序
     results.sort(key=lambda x: (x.get('quota', 0.0), x.get('cu_nav', 0.0)), reverse=True)
 
     # 判断是否为休市留存
@@ -214,9 +258,9 @@ def build_pure_text_report() -> str:
     lines = []
     lines.append("【08:05 盘前】美股跨境ETF申购限额官方监控 (按上限降序)")
     lines.append(f"基准日: {date_badge} | 模式: 沪深证券交易所官方直连")
-    lines.append("-" * 60)
-    lines.append("代码    简称          状态   当日上限   单户    CU   CU净值(万)  市场")
-    lines.append("-" * 60)
+    lines.append("-" * 78)
+    lines.append("代码    简称          状态   当日上限   单户    CU   CU净值(万)   溢价率   市场")
+    lines.append("-" * 78)
 
     for it in results:
         code = it['code']
@@ -227,29 +271,35 @@ def build_pure_text_report() -> str:
         u_val = it.get('user_quota', 0.0)
         cu_val = it.get('cu', 0.0)
         cu_nav_val = it.get('cu_nav', 0.0)
+        prem_val = it.get('premium_rate')
         src = it.get('source', '深市')
 
         if it.get('success'):
             quota_str = f"{q_val:>6.0f}万" if q_val > 0 else "  不限  "
             user_str = f"{u_val:>4.0f}万" if u_val > 0 else " 不限 "
-            cu_str = f"{cu_val:>4.0f}万" if cu_val > 0 else "   -  "
-            cu_nav_str = f"{cu_nav_val:>7.2f}万" if cu_nav_val > 0 else "    -   "
+            cu_str = f"{cu_val:>4.0f}万" if cu_val > 0 else "  -   "
+            cu_nav_str = f"{cu_nav_val:>8.2f}万" if cu_nav_val > 0 else "    -     "
         else:
             quota_str = " 未披露 "
             user_str = "  -   "
             cu_str = "  -   "
-            cu_nav_str = "    -   "
+            cu_nav_str = "    -     "
+
+        if prem_val is not None:
+            prem_str = f"{prem_val:>+7.1f}%"
+        else:
+            prem_str = "   -    "
 
         name_col = pad_cjk(name, 12)
-        lines.append(f"{code}  {name_col}  {st}  {quota_str:>7}  {user_str:>5}  {cu_str:>5}  {cu_nav_str:>9}  {src}")
+        lines.append(f"{code}  {name_col}  {st}  {quota_str}  {user_str}  {cu_str}  {cu_nav_str}  {prem_str}  {src}")
 
-    lines.append("-" * 60)
+    lines.append("-" * 78)
     lines.append("说明:")
     lines.append("1. 当日上限为基金公司事前申购总配额(万份)，高溢价时9:15竞价秒光;")
     lines.append("2. 单户限额为单一投资者账户当日申购封顶，CU为最小申赎单元(万份);")
     lines.append("3. CU净值为最小申购赎回单位资产净值(万元)，即申购1个CU所需资金;")
-    lines.append("   (例如: 159509最小申赎单位资产净值为 1925734.54元 = 192.57万元);")
-    lines.append("4. 数据源为沪深交易所盘前官方公开PCF XML清单，时效最高。")
+    lines.append("4. 溢价率=(上交易日二级市场收盘价 - 官方PCF净值(NAV)) / NAV * 100%;")
+    lines.append("5. 数据源为沪深交易所盘前官方公开PCF XML清单，时效最高。")
     return "\n".join(lines)
 
 def send_wechat_text(content: str) -> dict:
