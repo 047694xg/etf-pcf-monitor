@@ -1,9 +1,6 @@
 name: ETF PCF Monitor (08:05 AM Push)
 
 on:
-  schedule:
-    # UTC 00:05 = 北京时间 08:05 (周一至周五，周六日不启动)
-    - cron: '5 0 * * 1-5'
   workflow_dispatch:
 
 jobs:
