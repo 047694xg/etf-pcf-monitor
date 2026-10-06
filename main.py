@@ -1,6 +1,7 @@
 """
 ================================================================================
-美股跨境ETF(纳指/标普500/美国50) 盘前官方PCF申赎限额与溢价率监控引擎
+美股跨境ETF(纳指/标普500/美国50/道琼斯/美股行业) 盘前官方PCF申赎限额与溢价率监控引擎
+- 覆盖范围: 全市场 25 只全谱系美股跨境 QDII ETF (全网大满贯)
 - 定时标准: 每天早晨 08:05 准时执行并推送 (周一至周五工作日运行，周六日静默)
 - 深市标的 (159xxx): 直连深交所官方公开 PCF XML (智能探测最新可用与早间就绪轮询)
 - 沪市标的 (51xxxx): 直连上交所官方公开 PCF XML (最新托管文件直接提取)
@@ -33,9 +34,9 @@ SH_HEADERS = {
     'Referer': 'https://www.sse.com.cn/'
 }
 
-# 监控标的池：全市场主流美股跨境 ETF (纳指100 / 标普500 / 美国50)
+# 监控标的池：全市场 25 只全谱系美股跨境 ETF (纳指100 / 标普500 / 美国50 / 道琼斯 / 美股行业)
 MONITOR_POOL = [
-    # --- 深市跨境标的 ---
+    # --- 深市跨境标的 (14 只) ---
     {"code": "159509", "name": "景顺纳指科技", "market": "SZ", "category": "纳指"},
     {"code": "159501", "name": "嘉实纳指ETF",  "market": "SZ", "category": "纳指"},
     {"code": "159513", "name": "大成纳指100",  "market": "SZ", "category": "纳指"},
@@ -47,8 +48,11 @@ MONITOR_POOL = [
     {"code": "159655", "name": "华夏标普500",  "market": "SZ", "category": "标普"},
     {"code": "159612", "name": "国泰标普500",  "market": "SZ", "category": "标普"},
     {"code": "159577", "name": "汇添富美国50", "market": "SZ", "category": "美国50"},
+    {"code": "159502", "name": "标普生物科技", "market": "SZ", "category": "生物科技"},
+    {"code": "159529", "name": "标普消费ETF",  "market": "SZ", "category": "标普消费"},
+    {"code": "159518", "name": "嘉实标普油气", "market": "SZ", "category": "标普油气"},
 
-    # --- 沪市跨境标的 ---
+    # --- 沪市跨境标的 (11 只) ---
     {"code": "513100", "name": "国泰纳指ETF",  "market": "SH", "category": "纳指"},
     {"code": "513300", "name": "华夏纳斯达克", "market": "SH", "category": "纳指"},
     {"code": "513500", "name": "博时标普500",  "market": "SH", "category": "标普"},
@@ -58,6 +62,8 @@ MONITOR_POOL = [
     {"code": "513850", "name": "易方达美国50", "market": "SH", "category": "美国50"},
     {"code": "513110", "name": "华泰柏瑞纳指", "market": "SH", "category": "纳指"},
     {"code": "513290", "name": "汇添富纳指生", "market": "SH", "category": "纳指"},
+    {"code": "513400", "name": "道琼斯ETF",    "market": "SH", "category": "道琼斯"},
+    {"code": "513350", "name": "富国标普油气", "market": "SH", "category": "标普油气"},
 ]
 
 def str_display_width(s: str) -> int:
@@ -231,8 +237,8 @@ def build_pure_text_report() -> str:
     # 1. 批量获取上一交易日收盘价
     close_prices = fetch_all_close_prices(MONITOR_POOL)
 
-    # 2. 并发抓取官方 PCF XML
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    # 2. 并发抓取官方 PCF XML (标的扩充至25只，增加线程并发加速)
+    with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(lambda it: fetch_single_etf(it, sz_valid_date), MONITOR_POOL))
 
     # 3. 计算收盘溢价率: (收盘价 - 基金份额净值NAV) / NAV * 100%
@@ -256,7 +262,7 @@ def build_pure_text_report() -> str:
         date_badge = sz_valid_date
 
     lines = []
-    lines.append("【08:05 盘前】美股跨境ETF申购限额官方监控 (按上限降序)")
+    lines.append("【08:05 盘前】美股跨境ETF申购限额官方监控 (全市场25只)")
     lines.append(f"基准日: {date_badge} | 模式: 沪深证券交易所官方直连")
     lines.append("-" * 76)
     headers = ['代码  ', '简称' + ' ' * 10, '状态', '当日上限', '  单户', '    CU', 'CU净值(万)', '  溢价率']
